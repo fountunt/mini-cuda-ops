@@ -28,6 +28,7 @@ int main(){
 	float* h_a = (float*)malloc(bytes);
 	float* h_b = (float*)malloc(bytes);
 	float* h_c = (float*)malloc(bytes);
+
 	for(int i = 0;i < N;i++){
 		h_a[i] = i * 0.5f;
 		h_b[i] = i * 0.25f;
