@@ -2,7 +2,8 @@
 #include <cstdlib>
 #include <cuda_runtime.h>
 
-constexpr int N = 1 << 24;
+constexpr int GUARD = 256;
+constexpr int N = (1 << 24)+1;
 constexpr int BLOCK = 256;
 constexpr int REPEAT = 100;
 
@@ -37,7 +38,8 @@ int main(){
 	float *d_a,*d_b,*d_c;
 	CUDA_CHECK(cudaMalloc((void**)&d_a,bytes));
 	CUDA_CHECK(cudaMalloc((void**)&d_b,bytes));
-	CUDA_CHECK(cudaMalloc((void**)&d_c,bytes));
+	CUDA_CHECK(cudaMalloc((void**)&d_c,(size_t)(N + GUARD) * sizeof(float)));
+	CUDA_CHECK(cudaMemset(d_c + N,0xAB,(size_t)GUARD * sizeof(float)));
 
 	CUDA_CHECK(cudaMemcpy(d_a,h_a,bytes,cudaMemcpyHostToDevice));
 	CUDA_CHECK(cudaMemcpy(d_b,h_b,bytes,cudaMemcpyHostToDevice));
@@ -58,6 +60,17 @@ int main(){
 	CUDA_CHECK(cudaGetLastError());
 	CUDA_CHECK(cudaEventRecord(stop));
 	CUDA_CHECK(cudaEventSynchronize(stop));
+
+	unsigned char guard_host[GUARD * sizeof(float)];
+	CUDA_CHECK(cudaMemcpy(guard_host,d_c + N,(size_t)GUARD *
+	sizeof(float),cudaMemcpyDeviceToHost));
+
+	int dirty = 0;
+	for(int k = 0;k < (int)(GUARD * sizeof(float));k++){
+        	if(guard_host[k] != 0xAB) dirty++;
+	}
+	printf("guard: %s  (%d / %d bytes changed)\n",
+        	dirty ? "FAIL" : "ok",dirty,(int)(GUARD * sizeof(float)));
 
 	float total_ms = 0.0f;
 	CUDA_CHECK(cudaEventElapsedTime(&total_ms,start,stop));
