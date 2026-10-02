@@ -8,3 +8,5 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 add_executable(vector_add src/vector_add.cu)
+
+add_executable(reduction src/reduction.cu)
