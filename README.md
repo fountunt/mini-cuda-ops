@@ -31,7 +31,7 @@ python verify.py
 | 算子 | kernel | PyTorch校验 | benchmark |
 |---|---|---|---|
 | vector_add | ✅ | ✅ | ✅ |
-| reduction | ⬜| ⬜| ⬜|
+| reduction | ✅ | ✅ | ✅ |
 | softmax | ⬜| ⬜| ⬜|
 | layernorm | ⬜| ⬜| ⬜|
 | GEMM(naive) | ⬜| ⬜| ⬜|
@@ -66,6 +66,46 @@ per-call 0.6777 ms · 297.1 GB/s
 
 ## 算子2 reduction
 
+求N个float之和，N = 2^24+1
+
 | 版本 | 实现方式 | per-call | 有效带宽 | 相对误差 |
 |---|---|---|---|---|
 | v0 | 1 线程顺序累加 | 418.7 ms | 0.160 GB/s | 4.17e-2 |
+| v1 | 多block + 块内树形归约 | 0.2128ms | 315.4GB/s | 5.960e-8 |
+| 标杆 | torch.sum | 0.2167ms | 309.6GB/s | 5.960e-8 |
+
+`./build/reduction 0/1/2` 选择版本，共用一份host脚手架与一份输入
+
+### 正确性
+
+v1与torch.sum的输出逐位相同(`140737505132544.0`)
+
+### 数值精度：5.960e-8是硬下限，不是调优结果
+
+精确和 = 2^23 * 16777217
+最近两个 float32 = 2^47 和 2^47 + 2^24
+精确和距离都为2^23 -- 恰好落在正中间
+
+### 瓶颈分析
+
+算数强度 = 1flop / 4 bytes = 0.25 flop/byte 纯宽带受限
+
+**分母用 torch.sum 的309.6GB/s 而不是vector_add的306.7GB/s**
+后者是"读2写1" reduction是"纯读取"
+口径不同 不可混用
+
+v1 达到 315.4 GB/s = torch.sum 的 ~102%
+比 torch.sum 快 1.8% ≪ 本机噪声底 ±6%
+→ 判定"达到 torch.sum 水平",不声称更快
+
+**已无优化空间,依据是实测的流量构成:**
+
+k1 读 67,108,868 B ← 全部 DRAM 流量
+k2 读 4,096 B ← 占比 0.006%
+
+213 µs 里几乎 100% 是 k1 访存,归约的数学量相对每线程 64 次全局读可忽略
+
+### 越界检测
+
+reduction **没有** vector_add 那种尾部越界线程 —— grid-stride 的 `i < n` 天然兜底,
+所以 vector_add 那套哨兵法在这里不适用。共享内存 `sh[tid]` 的边界由"数组大小 = blockDim"保证。
