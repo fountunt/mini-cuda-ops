@@ -4,6 +4,8 @@
 
 constexpr int N = (1 << 24)+1;
 constexpr int REPEAT = 10;
+constexpr int BLOCK = 256;
+constexpr int GRID = 1024;
 
 #define CUDA_CHECK(call)\
 	do{\
@@ -16,7 +18,8 @@ constexpr int REPEAT = 10;
 	} while(0)
 
 //GPU计算加法
-__global__ void reduce_kernel(const float* x,float* out,int n){
+//--------v0:单线程版本--------
+__global__ void reduce_v0_kernel(const float* x,float* out,int n){
 	float sum = 0.0f;
 	for(int i = 0;i < n;i++){
 		sum += x[i];
@@ -24,7 +27,59 @@ __global__ void reduce_kernel(const float* x,float* out,int n){
 	out[0] = sum;
 }
 
-int main(){
+//---------v1:多block + 块内shared树形规约-------
+__global__ void reduce_kernel(const float* x,float* partial,int n){
+	__shared__ float sh[BLOCK];
+	int tid = threadIdx.x;
+	int gtid = blockIdx.x * blockDim.x + tid;
+
+	float local = 0.0f;
+	for(int i = gtid;i < n;i += gridDim.x * blockDim.x){
+		local += x[i];
+	}
+
+	sh[tid] = local;
+	__syncthreads();
+
+	for(int s = BLOCK >> 1;s > 0;s >>= 1){
+		if(tid < s) sh[tid] += sh[tid + s];
+		__syncthreads();
+	}
+
+	if(tid == 0) partial[blockIdx.x] = sh[0];
+}
+
+__global__ void reduce_final(const float* partial,float* out,int m){
+	__shared__ float sh[BLOCK];
+	int tid = threadIdx.x;
+
+	float local = 0.0f;
+	for(int i = tid;i < m;i += blockDim.x){
+		local += partial[i];
+	}
+
+	sh[tid] = local;
+	__syncthreads();
+
+	for(int s = BLOCK >> 1;s > 0;s >>= 1){
+		if(tid < s) sh[tid] += sh[tid + s];
+		__syncthreads();
+	}
+
+	if(tid == 0) out[0] = sh[0];
+}
+
+void launch(int ver,const float* d_x,float* d_partial,float* d_out,int n){
+	if(ver == 0){
+		reduce_v0_kernel<<<1,1>>>(d_x,d_out,n);
+	} else {
+		reduce_kernel<<<GRID,BLOCK>>>(d_x,d_partial,n);
+		reduce_final<<<1,BLOCK>>>(d_partial,d_out,GRID);
+	}
+}
+
+int main(int argc,char** argv){
+	int ver = (argc > 1) ? atoi(argv[1]) : 1;
 	//输入数组字节数
 	const size_t bytes = (size_t)N * sizeof(float);
 
@@ -38,9 +93,10 @@ int main(){
 	}
 
 	//device计算
-	float *d_x,*d_out;
+	float *d_x,*d_out,*d_partial;
 	CUDA_CHECK(cudaMalloc(&d_x,bytes));
 	CUDA_CHECK(cudaMalloc(&d_out,sizeof(float)));
+	CUDA_CHECK(cudaMalloc(&d_partial,GRID * sizeof(float)));
 
 	//拷贝数据 host->device
 	CUDA_CHECK(cudaMemcpy(d_x,h_x,bytes,cudaMemcpyHostToDevice));
@@ -51,13 +107,13 @@ int main(){
 	CUDA_CHECK(cudaEventCreate(&stop));
 
 	//预热，让GPU进入稳定状态，避免冷启动开销影响时间
-	reduce_kernel<<<1,1>>>(d_x,d_out,N);
+	launch(ver,d_x,d_partial,d_out,N);
 	CUDA_CHECK(cudaGetLastError());
 
 	//重复跑
 	CUDA_CHECK(cudaEventRecord(start));
 	for(int r = 0;r < REPEAT;r++){
-		reduce_kernel<<<1,1>>>(d_x,d_out,N);
+		launch(ver,d_x,d_partial,d_out,N);
 	}
 	CUDA_CHECK(cudaGetLastError());
 	CUDA_CHECK(cudaEventRecord(stop));
@@ -72,7 +128,7 @@ int main(){
 
 	//输出结果
 	double gb = 1.0 * (double)bytes / 1e9;
-	printf("N = %d launch = <<<1,1>>> REPEAT = %d\n",N,REPEAT);
+	printf("N = %d ver = v%d REPEAT = %d\n",N,ver,REPEAT);
 	printf("total = %.3f ms  per-call = %.4f ms\n",total_ms,ms);
 	printf("bandwidth = %.3f GB/s\n",gb / ((double)ms * 1e-3));
 	printf("sum = %.9g\n",(double)h_out[0]);
