@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 
 constexpr int N = (1 << 24)+1;
-constexpr int REPEAT = 10;
+constexpr int REPEAT = 1000;
 constexpr int BLOCK = 256;
 constexpr int GRID = 1024;
 
@@ -69,9 +69,68 @@ __global__ void reduce_final(const float* partial,float* out,int m){
 	if(tid == 0) out[0] = sh[0];
 }
 
+//------------v2--------------
+__global__ void reduce_kernel_v2(const float* x,float* partial,int n){
+	__shared__ float sh[BLOCK / 32];
+	int tid = threadIdx.x;
+	int gtid = blockIdx.x * blockDim.x + tid;
+	int lane = tid & 31;
+	int wid = tid >> 5;
+
+	float local = 0.0f;
+	for(int i = gtid;i < n;i+= gridDim.x * blockDim.x){
+		local += x[i];
+	}
+
+	for(int off = 16;off > 0;off >>= 1){
+		local += __shfl_down_sync(0xffffffffu,local,off);
+	}
+
+	if(lane == 0) sh[wid] = local;
+	__syncthreads();
+
+	if(wid == 0){
+		local = (lane < BLOCK / 32) ? sh[lane] : 0.0f;
+		for(int off = 16;off > 0;off >>= 1){
+			local += __shfl_down_sync(0xffffffffu,local,off);
+		}
+		if(lane == 0) partial[blockIdx.x] = local;
+	}
+}
+
+__global__ void reduce_final_v2(const float* partial,float* out,int m){
+        __shared__ float sh[BLOCK / 32];
+        int tid = threadIdx.x;
+        int lane = tid & 31;
+        int wid = tid >> 5;
+
+        float local = 0.0f;
+        for(int i = tid;i < m;i += blockDim.x){
+                local += partial[i];
+        }
+
+        for(int off = 16;off > 0;off >>= 1){
+                local += __shfl_down_sync(0xffffffffu,local,off);
+        }
+
+        if(lane == 0) sh[wid] = local;
+        __syncthreads();
+
+        if(wid == 0){
+                local = (lane < BLOCK / 32) ? sh[lane] : 0.0f;
+                for(int off = 16;off > 0;off >>= 1){
+                        local += __shfl_down_sync(0xffffffffu,local,off);
+                }
+                if(lane == 0) out[0] = local;
+        }
+}
+
 void launch(int ver,const float* d_x,float* d_partial,float* d_out,int n){
 	if(ver == 0){
 		reduce_v0_kernel<<<1,1>>>(d_x,d_out,n);
+	} else if(ver == 2){
+		reduce_kernel_v2<<<GRID,BLOCK>>>(d_x,d_partial,n);
+		reduce_final_v2<<<1,BLOCK>>>(d_partial,d_out,GRID);
 	} else {
 		reduce_kernel<<<GRID,BLOCK>>>(d_x,d_partial,n);
 		reduce_final<<<1,BLOCK>>>(d_partial,d_out,GRID);
@@ -80,6 +139,11 @@ void launch(int ver,const float* d_x,float* d_partial,float* d_out,int n){
 
 int main(int argc,char** argv){
 	int ver = (argc > 1) ? atoi(argv[1]) : 1;
+	int reps = (argc > 2) ? atoi(argv[2]) : REPEAT;
+	if(reps <= 0){
+		printf("reps must be > 0,got %d\n",reps);
+		return 1;
+	}
 	//输入数组字节数
 	const size_t bytes = (size_t)N * sizeof(float);
 
@@ -112,7 +176,7 @@ int main(int argc,char** argv){
 
 	//重复跑
 	CUDA_CHECK(cudaEventRecord(start));
-	for(int r = 0;r < REPEAT;r++){
+	for(int r = 0;r < reps;r++){
 		launch(ver,d_x,d_partial,d_out,N);
 	}
 	CUDA_CHECK(cudaGetLastError());
@@ -124,11 +188,11 @@ int main(int argc,char** argv){
 	//计算时间
 	float total_ms = 0.0f;
 	CUDA_CHECK(cudaEventElapsedTime(&total_ms,start,stop));
-	float ms = total_ms / REPEAT;
+	float ms = total_ms / reps;
 
 	//输出结果
 	double gb = 1.0 * (double)bytes / 1e9;
-	printf("N = %d ver = v%d REPEAT = %d\n",N,ver,REPEAT);
+	printf("N = %d ver = v%d REPEAT = %d\n",N,ver,reps);
 	printf("total = %.3f ms  per-call = %.4f ms\n",total_ms,ms);
 	printf("bandwidth = %.3f GB/s\n",gb / ((double)ms * 1e-3));
 	printf("sum = %.9g\n",(double)h_out[0]);

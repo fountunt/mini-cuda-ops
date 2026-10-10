@@ -1,11 +1,11 @@
 import torch
 
 N = (1 << 24) + 1
-REPEAT = 100
+REPEAT = 1000
 
 x = torch.arange(N,dtype=torch.float,device="cuda")
 
-for _ in range(10):
+for _ in range(100):
 	s = torch.sum(x)
 torch.cuda.synchronize()
 
