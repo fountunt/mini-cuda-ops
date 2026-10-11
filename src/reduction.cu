@@ -131,6 +131,8 @@ void launch(int ver,const float* d_x,float* d_partial,float* d_out,int n){
 	} else if(ver == 2){
 		reduce_kernel_v2<<<GRID,BLOCK>>>(d_x,d_partial,n);
 		reduce_final_v2<<<1,BLOCK>>>(d_partial,d_out,GRID);
+	} else if(ver == 3){
+		reduce_kernel<<<GRID,BLOCK>>>(d_x,d_partial,n);
 	} else {
 		reduce_kernel<<<GRID,BLOCK>>>(d_x,d_partial,n);
 		reduce_final<<<1,BLOCK>>>(d_partial,d_out,GRID);
