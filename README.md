@@ -49,8 +49,8 @@ source ~/venv/bin/activate && python verify_reduction.py
 | 算子 | 配置 | 耗时 | 有效带宽 | 对比基准 | 相对基准 |
 |---|---|---|---|---|---|
 | vector_add | N=2^24+1 BLOCK=256 grid=65537 | 0.6777 ms | 297.1 GB/s | PyTorch add(a,c,out=b) 实测可达峰值306.7 GB/s | 96.9% |
-| reduction v1 | N=2^24+1 BLOCK=256 grid=1024 | ~0.226 ms | ~297 GB/s | torch.sum ~0.225 ms / ~299 GB/s | ~100% |
-| reduction v2 | warp shuffle,其余同上 | ~0.226 ms | ~297 GB/s | 同上 | ~100% |
+| reduction v1 | N=2^24+1 BLOCK=256 grid=1024 | ~0.23 ms | ~290 GB/s | torch.sum ~0.225 ms / ~299 GB/s | ~100% |
+| reduction v2 | warp shuffle,其余同上 | ~0.23 ms | ~290 GB/s | 同上 | ~100% |
 ## 算子1 vector_add
 ### 正确性     
 
@@ -62,7 +62,7 @@ per-call 0.6777 ms · 297.1 GB/s
 
 ### 瓶颈分析   
 
-算术强度 1 flop / 12 bytes ≈ 0.083 → 纯带宽受限，可达峰值 91~97% → 无优化空间
+算术强度 1 flop / 12 bytes ≈ 0.083 → 纯带宽受限，可达峰值 91~97%
 
 ### 越界检测   
 
@@ -76,7 +76,7 @@ per-call 0.6777 ms · 297.1 GB/s
 
 求 N 个 float 之和,N = 2^24+1 = 16777217。
 
-**测量协议**:REPEAT=1000(窗口 226 ms),预热后取交替实测均值。(窗口选择理由见下「测量方法」一节。)
+**测量协议**:REPEAT=1000(窗口 226 ms),预热后取交替实测均值
 
 | 版本 | 实现方式 | per-call | 有效带宽 | 相对误差 |
 |---|---|---|---|---|
