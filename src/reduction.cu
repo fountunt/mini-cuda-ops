@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <memory>
+#include <stdexcept>
+#include <string>
 
 constexpr int N = (1 << 24)+1;
 constexpr int REPEAT = 1000;
@@ -10,12 +12,13 @@ constexpr int GRID = 1024;
 
 #define CUDA_CHECK(call)\
 	do{\
-	   cudaError_t err = (call);\
-	   if(err != cudaSuccess) {\
-		printf("CUDA error at %s:%d -> %s\n",__FILE__,__LINE__,\
-			cudaGetErrorString(err));\
-		exit(1);\
-	   }\
+		cudaError_t err = (call);\
+		if(err != cudaSuccess) {\
+			throw std::runtime_error(\
+				std::string("CUDA error at ") + __FILE__ + ":"\
+				+std::to_string(__LINE__) + "->"\
+				+cudaGetErrorString(err));\
+		}\
 	} while(0)
 
 //--------设备内存:unique_ptr + 自定义 deleter ---------
@@ -170,7 +173,7 @@ void launch(int ver,const float* d_x,float* d_partial,float* d_out,int n){
 	}
 }
 
-int main(int argc,char** argv){
+int run(int argc,char** argv){
 	int ver = (argc > 1) ? atoi(argv[1]) : 1;
 	int reps = (argc > 2) ? atoi(argv[2]) : REPEAT;
 	if(reps <= 0){
@@ -253,4 +256,13 @@ int main(int argc,char** argv){
 
 	printf("ok\n");
 	return 0;
+}
+
+int main(int argc,char** argv){
+	try{
+		return run(argc,argv);
+	} catch (const std::exception& e) {
+		printf("FATAL: %s\n",e.what());
+		return 1;
+	}
 }
