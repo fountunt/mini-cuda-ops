@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <memory>
 
 constexpr int N = (1 << 24)+1;
 constexpr int REPEAT = 1000;
@@ -16,6 +17,36 @@ constexpr int GRID = 1024;
 		exit(1);\
 	   }\
 	} while(0)
+
+//--------设备内存:unique_ptr + 自定义 deleter ---------
+struct CudaFreeDeleter{
+	void operator()(void* p) const noexcept{
+		if(p) cudaFree(p);
+	}
+};
+
+template<typename T>
+std::unique_ptr<T[],CudaFreeDeleter> make_dev_buf(size_t count) {
+	T* raw = nullptr;
+	CUDA_CHECK(cudaMalloc(&raw,count * sizeof(T)));
+	return std::unique_ptr<T[],CudaFreeDeleter>(raw);
+}
+
+//---------事件:手写 RAII --------
+class CudaEventGuard {
+public:
+	CudaEventGuard() {CUDA_CHECK(cudaEventCreate(&e_));}
+	~CudaEventGuard() { if(e_) cudaEventDestroy(e_);};
+
+	CudaEventGuard(const CudaEventGuard&) = delete;
+	CudaEventGuard& operator=(const CudaEventGuard&) = delete;
+	CudaEventGuard(CudaEventGuard&&) = delete;
+	CudaEventGuard& operator=(CudaEventGuard&&) = delete;
+
+	cudaEvent_t get() const {return e_;}
+private:
+	cudaEvent_t e_ = nullptr;
+};
 
 //GPU计算加法
 //--------v0:单线程版本--------
@@ -159,37 +190,34 @@ int main(int argc,char** argv){
 	}
 
 	//device计算
-	float *d_x,*d_out,*d_partial;
-	CUDA_CHECK(cudaMalloc(&d_x,bytes));
-	CUDA_CHECK(cudaMalloc(&d_out,sizeof(float)));
-	CUDA_CHECK(cudaMalloc(&d_partial,GRID * sizeof(float)));
+	auto d_x = make_dev_buf<float>(N);
+	auto d_out = make_dev_buf<float>(1);
+	auto d_partial = make_dev_buf<float>(GRID);
 
 	//拷贝数据 host->device
-	CUDA_CHECK(cudaMemcpy(d_x,h_x,bytes,cudaMemcpyHostToDevice));
+	CUDA_CHECK(cudaMemcpy(d_x.get(),h_x,bytes,cudaMemcpyHostToDevice));
 
 	//创建计时标记start，stop
-	cudaEvent_t start,stop;
-	CUDA_CHECK(cudaEventCreate(&start));
-	CUDA_CHECK(cudaEventCreate(&stop));
+	CudaEventGuard start,stop;
 
 	//预热，让GPU进入稳定状态，避免冷启动开销影响时间
-	launch(ver,d_x,d_partial,d_out,N);
+	launch(ver,d_x.get(),d_partial.get(),d_out.get(),N);
 	CUDA_CHECK(cudaGetLastError());
 
 	//重复跑
-	CUDA_CHECK(cudaEventRecord(start));
+	CUDA_CHECK(cudaEventRecord(start.get()));
 	for(int r = 0;r < reps;r++){
-		launch(ver,d_x,d_partial,d_out,N);
+		launch(ver,d_x.get(),d_partial.get(),d_out.get(),N);
 	}
 	CUDA_CHECK(cudaGetLastError());
-	CUDA_CHECK(cudaEventRecord(stop));
-	CUDA_CHECK(cudaEventSynchronize(stop));
+	CUDA_CHECK(cudaEventRecord(stop.get()));
+	CUDA_CHECK(cudaEventSynchronize(stop.get()));
 
-	CUDA_CHECK(cudaMemcpy(h_out,d_out,sizeof(float),cudaMemcpyDeviceToHost));
+	CUDA_CHECK(cudaMemcpy(h_out,d_out.get(),sizeof(float),cudaMemcpyDeviceToHost));
 
 	//计算时间
 	float total_ms = 0.0f;
-	CUDA_CHECK(cudaEventElapsedTime(&total_ms,start,stop));
+	CUDA_CHECK(cudaEventElapsedTime(&total_ms,start.get(),stop.get()));
 	float ms = total_ms / reps;
 
 	//输出结果
@@ -220,10 +248,6 @@ int main(int argc,char** argv){
 	printf("wrote sum.bin (4 bytes)\n");
 
 	//释放内存
-	CUDA_CHECK(cudaEventDestroy(start));
-	CUDA_CHECK(cudaEventDestroy(stop));
-	CUDA_CHECK(cudaFree(d_x));
-	CUDA_CHECK(cudaFree(d_out));
 	free(h_x);
 	free(h_out);
 
