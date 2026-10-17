@@ -10,3 +10,5 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 add_executable(vector_add src/vector_add.cu)
 
 add_executable(reduction src/reduction.cu)
+
+add_executable(softmax src/softmax.cu)
