@@ -1,13 +1,31 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <cmath>
 
 constexpr int ROWS = 4096;
 constexpr int COLS = 4096;
 constexpr int BLOCK = 256;
 
 __global__ void row_max_kernel(const float* x,float* m){
+	__shared__ float sh[BLOCK];
+	const int tid = threadIdx.x;
+	const float* row = x + (size_t)blockIdx.x * COLS;
 
+	float local = -INFINITY;
+	for(int j = tid;j < COLS;j += BLOCK){
+		local = fmaxf(local,row[j]);
+	}
+
+	sh[tid] = local;
+	__syncthreads();
+
+	for(int s = BLOCK >> 1;s > 0;s >>= 1){
+		if(tid < s) sh[tid] = fmaxf(sh[tid],sh[tid + s]);
+		__syncthreads();
+	}
+
+	if(tid == 0) m[blockIdx.x] = sh[0];
 }
 
 int main(){
@@ -50,6 +68,46 @@ int main(){
 	fclose(fp);
 	printf("wrote x.bin (%zu bytes),fwrite returned %zu\n",bytes,wrote);
 
+	float* d_x = nullptr;
+	float* d_m = nullptr;
+	cudaMalloc(&d_x,bytes);
+	cudaMalloc(&d_m,(size_t)ROWS * sizeof(float));
+	cudaMemcpy(d_x,h_x,bytes,cudaMemcpyHostToDevice);
+
+	row_max_kernel<<<ROWS,BLOCK>>>(d_x,d_m);
+
+	cudaError_t err = cudaGetLastError();
+
+	if(err != cudaSuccess){
+		printf("kernel launch failed: %s\n",cudaGetErrorString(err));
+		return 1;
+	}
+
+	float* h_m = (float*)malloc((size_t)ROWS * sizeof(float));
+	if(h_m == NULL){
+		printf("malloc h_m failed\n");
+		return 1;
+	}
+	err = cudaMemcpy(h_m,d_m,(size_t)ROWS * sizeof(float),cudaMemcpyDeviceToHost);
+	if(err != cudaSuccess){
+		printf("copy m failed: %s\n",cudaGetErrorString(err));
+		return 1;
+	}
+
+	FILE* fm = fopen("m.bin","wb");
+	if(fm == NULL){
+		printf("打开m.bin失败\n");
+		return 1;
+	}
+	size_t wrote_m = fwrite(h_m,sizeof(float),(size_t)ROWS,fm);
+	fclose(fm);
+        printf("wrote m.bin (%zu floats),fwrite returned %zu\n",(size_t)ROWS,wrote_m);
+
+        printf("m[0]=%.6f m[1]=%.6f m[2]=%.6f\n",h_m[0],h_m[1],h_m[2]);
+
+	free(h_m);
+	cudaFree(d_m);
+	cudaFree(d_x);
 	free(h_x);
 	printf("ok\n");
 	return 0;
