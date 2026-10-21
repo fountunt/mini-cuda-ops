@@ -70,40 +70,75 @@ int main(){
 
 	float* d_x = nullptr;
 	float* d_m = nullptr;
-	cudaMalloc(&d_x,bytes);
-	cudaMalloc(&d_m,(size_t)ROWS * sizeof(float));
-	cudaMemcpy(d_x,h_x,bytes,cudaMemcpyHostToDevice);
+	cudaError_t err;
+
+	err = cudaMalloc(&d_x,bytes);
+	if(err != cudaSuccess){
+		printf("cudaMalloc d_x failed: %s\n",cudaGetErrorString(err));
+		free(h_x);
+		return 1;
+	}
+	err = cudaMalloc(&d_m,(size_t)ROWS * sizeof(float));
+	if(err != cudaSuccess){
+		printf("cudaMalloc d_m failed: %s\n",cudaGetErrorString(err));
+		cudaFree(d_x);
+		free(h_x);
+		return 1;
+	}
+
+	err = cudaMemcpy(d_x,h_x,bytes,cudaMemcpyHostToDevice);
+	if(err != cudaSuccess){
+		printf("copy x to device failed: %s\n",cudaGetErrorString(err));
+		cudaFree(d_m);
+		cudaFree(d_x);
+		free(h_x);
+		return 1;
+	}
 
 	row_max_kernel<<<ROWS,BLOCK>>>(d_x,d_m);
 
-	cudaError_t err = cudaGetLastError();
+	err = cudaGetLastError();
 
 	if(err != cudaSuccess){
 		printf("kernel launch failed: %s\n",cudaGetErrorString(err));
+		cudaFree(d_m);
+		cudaFree(d_x);
+		free(h_x);
 		return 1;
 	}
 
 	float* h_m = (float*)malloc((size_t)ROWS * sizeof(float));
 	if(h_m == NULL){
 		printf("malloc h_m failed\n");
+		cudaFree(d_m);
+		cudaFree(d_x);
+		free(h_x);
 		return 1;
 	}
 	err = cudaMemcpy(h_m,d_m,(size_t)ROWS * sizeof(float),cudaMemcpyDeviceToHost);
 	if(err != cudaSuccess){
 		printf("copy m failed: %s\n",cudaGetErrorString(err));
+		free(h_m);
+		cudaFree(d_m);
+		cudaFree(d_x);
+		free(h_x);
 		return 1;
 	}
 
 	FILE* fm = fopen("m.bin","wb");
 	if(fm == NULL){
 		printf("打开m.bin失败\n");
+		free(h_m);
+		cudaFree(d_m);
+		cudaFree(d_x);
+		free(h_x);
 		return 1;
 	}
 	size_t wrote_m = fwrite(h_m,sizeof(float),(size_t)ROWS,fm);
 	fclose(fm);
-        printf("wrote m.bin (%zu floats),fwrite returned %zu\n",(size_t)ROWS,wrote_m);
+	printf("wrote m.bin (%zu floats),fwrite returned %zu\n",(size_t)ROWS,wrote_m);
 
-        printf("m[0]=%.6f m[1]=%.6f m[2]=%.6f\n",h_m[0],h_m[1],h_m[2]);
+	printf("m[0]=%.6f m[1]=%.6f m[2]=%.6f\n",h_m[0],h_m[1],h_m[2]);
 
 	free(h_m);
 	cudaFree(d_m);
