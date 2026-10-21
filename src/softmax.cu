@@ -58,7 +58,92 @@ __global__ void row_sum_kernel(const float* x,const float* m,float* y){
 	}
 }
 
-int main(){
+static void bench(const float* d_x,float* d_m,float* d_y){
+	const int WARM = 100;
+	const int REPS1 = 1000;
+	const int REPS2 = 500;
+	const int REPS3 = 500;
+	const size_t n = (size_t)ROWS * COLS;
+
+	cudaEvent_t start,stop;
+	cudaError_t err;
+
+	err = cudaEventCreate(&start);
+	if(err != cudaSuccess){printf("event create failed\n"); return;}
+        err = cudaEventCreate(&stop);
+        if(err != cudaSuccess){printf("event create failed\n"); cudaEventDestroy(start); return;}
+
+	//k1:纯读
+	for(int i = 0;i < WARM;i++) row_max_kernel<<<ROWS,BLOCK>>>(d_x,d_m);
+	err = cudaGetLastError();
+	if(err != cudaSuccess){
+		printf("k1 warmup failed: %s\n",cudaGetErrorString(err));
+		return;
+	}
+
+	cudaEventRecord(start);
+	for(int i = 0;i < REPS1;i++) row_max_kernel<<<ROWS,BLOCK>>>(d_x,d_m);
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	float ms1 = 0.0f;
+	cudaEventElapsedTime(&ms1,start,stop);
+	ms1 /= REPS1;
+
+	//k2:读1写1
+        for(int i = 0;i < WARM;i++) row_sum_kernel<<<ROWS,BLOCK>>>(d_x,d_m,d_y);
+        err = cudaGetLastError();
+        if(err != cudaSuccess){
+                printf("k2 warmup failed: %s\n",cudaGetErrorString(err));
+                return;
+        }
+
+        cudaEventRecord(start);
+        for(int i = 0;i < REPS2;i++) row_sum_kernel<<<ROWS,BLOCK>>>(d_x,d_m,d_y);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        float ms2 = 0.0f;
+        cudaEventElapsedTime(&ms2,start,stop);
+        ms2 /= REPS2;
+
+	//k1+k2
+        for(int i = 0;i < WARM;i++){
+		row_max_kernel<<<ROWS,BLOCK>>>(d_x,d_m);
+		row_sum_kernel<<<ROWS,BLOCK>>>(d_x,d_m,d_y);
+	}
+        err = cudaGetLastError();
+        if(err != cudaSuccess){
+                printf("combined warmup failed: %s\n",cudaGetErrorString(err));
+                return;
+        }
+
+        cudaEventRecord(start);
+        for(int i = 0;i < REPS3;i++){
+		row_max_kernel<<<ROWS,BLOCK>>>(d_x,d_m);
+		row_sum_kernel<<<ROWS,BLOCK>>>(d_x,d_m,d_y);
+	}
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        float ms3 = 0.0f;
+        cudaEventElapsedTime(&ms3,start,stop);
+        ms3 /= REPS3;
+
+	double gb1 = 1.0 * n * 4 / 1e9;
+	double gb2 = 1.0 * n * 8 / 1e9;
+	double gb3 = 1.0 * n * 12 / 1e9;
+
+	printf("k1:\nper-call = %.4f ms\nbw = %.1f GB/s\nREPEAT = %d\nwindow = %.1fms\ntotal = %.1f ms\n",
+		ms1,gb1 / (ms1 * 1e-3),REPS1,ms1 * REPS1,(WARM + REPS1) * ms1);
+	printf("k2:\nper-call = %.4f ms\nbw = %.1f GB/s\nREPEAT = %d\nwindow = %.1fms\ntotal = %.1f ms\n",
+		ms2,gb2 / (ms2 * 1e-3),REPS2,ms2 * REPS2,(WARM + REPS2) * ms2);
+	printf("k1+k2:\nper-call = %.4f ms\nbw = %.1f GB/s\nREPEAT = %d\nwindow = %.1fms\ntotal = %.1f ms\n",
+		ms3,gb3 / (ms3 * 1e-3),REPS3,ms3 * REPS3,(WARM + REPS3) * ms3);
+
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+}
+
+
+int main(int argc,char** argv){
 	const size_t n = (size_t)ROWS * COLS;
 	const size_t bytes = n * sizeof(float);
 
@@ -241,6 +326,8 @@ int main(){
 	printf("y[0][0]=%.9g y[0][%d]=%.9g ratio=%.3f\n",
 		h_y[0],COLS - 1,h_y[COLS-1],h_y[0] / h_y[COLS - 1]);
 	printf("y[1][0]=%.9g y[1][1]=%.9g\n",h_y[COLS],h_y[COLS + 1]);
+
+	if(argc > 1 && argv[1][0] == 'b') bench(d_x,d_m,d_y);
 
 	free(h_y);
 	free(h_m);
