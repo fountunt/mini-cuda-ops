@@ -1,7 +1,7 @@
 import torch
 
 N = 4096 * 4096
-REPEAT = 1000
+REPEAT = 500
 WARMUP = 100
 
 a = torch.randn(N,device="cuda")
