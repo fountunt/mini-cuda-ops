@@ -12,3 +12,5 @@ add_executable(vector_add src/vector_add.cu)
 add_executable(reduction src/reduction.cu)
 
 add_executable(softmax src/softmax.cu)
+
+add_executable(layernorm src/layernorm.cu)
