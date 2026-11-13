@@ -55,8 +55,8 @@ source ~/venv/bin/activate && python softmax_y_check.py
 
 | 算子 | 配置 | 耗时 | 有效带宽 | 对比基准 | 相对基准 |
 |---|---|---|---|---|---|
-| vector_add | N=2^24+1 BLOCK=256 grid=65537 | ~0.63 ms | ~320 GB/s | PyTorch add(a,c,out=b) torch.add 0.62 ms / 325 GB/s | ~98% |
-| reduction v1 | N=2^24+1 BLOCK=256 grid=1024 | ~0.21 ms | ~320 GB/s | torch.sum ~0.225 ms / ~327 GB/s | ~98% |
+| vector_add | N=2^24+1 BLOCK=256 grid=65537 | ~0.63 ms | ~320 GB/s | PyTorch add(a,c,out=b) 0.62 ms / 325 GB/s | ~98% |
+| reduction v1 | N=2^24+1 BLOCK=256 grid=1024 | ~0.21 ms | ~320 GB/s | torch.sum ~0.205 ms / ~327 GB/s | ~98% |
 | reduction v2 | warp shuffle,其余同上 | ~0.20 ms | ~330 GB/s | 同上 | ~100% |
 | softmax k1 | 4096*4096 一行一block 纯读 | ~0.21 ms | ~320 GB/s | torch.sum 0.205 ms / 327 GB/s | ~98% |
 | softmax k2 | 读1写1,8 B/元素 | ~0.50 ms | ~270 GB/s | torch.neg 0.432 ms / 311 GB/s | ~87% |
@@ -75,7 +75,7 @@ per-call 0.63 ms / 320 GB/s
 
 ### 瓶颈分析   
 
-算术强度 1 flop / 12 bytes ≈ 0.083 → 纯带宽受限，可达峰值 97%
+算术强度 1 flop / 12 bytes ≈ 0.083 → 纯带宽受限，可达峰值 98%
 
 ### 越界检测   
 
@@ -96,7 +96,7 @@ per-call 0.63 ms / 320 GB/s
 | v0 | 1 block × 1 thread 顺序累加 | ~0.43 s | ~0.15 GB/s | 4.17e-2 |
 | v1 | 1024 block × 256 thread + 块内 shared 树形归约 | ~0.21 ms | ~320 GB/s | 5.960e-8 |
 | v2 | warp shuffle 归约(上同) | ~0.20 ms | ~330 GB/s | 5.960e-8 |
-| 标杆 | torch.sum(CUB DeviceReduce) | ~0.225 ms | ~327 GB/s | 5.960e-8 |
+| 标杆 | torch.sum(CUB DeviceReduce) | ~0.205 ms | ~327 GB/s | 5.960e-8 |
 
 `./build/reduction` 选择版本与重复次数,所有版本共用同一份 host脚手架与输入。
 
@@ -136,7 +136,7 @@ per-call 0.63 ms / 320 GB/s
 
 算术强度 = 1 flop / 4 bytes = 0.25 flop/byte   → 纯带宽受限
 
-**分母用 torch.sum 的 ~327 GB/s,不能用 vector_add 的 306.7 GB/s。**
+**分母用 torch.sum 的 ~327 GB/s,不能用 vector_add 的 325 GB/s。**
 后者是"读 2 写 1"(12 B/元素)测的,reduction 是**纯读**(4 B/元素)。
 写有写回周转开销,纯读流的上限更高 —— **口径不同,不可混用。**
 
@@ -168,7 +168,7 @@ k1,k2 在同一个stream上顺序执行,k2依赖k1的结果,同stream保证顺�
 
 **测量协议**:插电,WARM=100,k1 REPEAT=1000(~210ms),k2 REPEAT=500(~250ms),k1+k2 REPEAT=300(~215ms);每段两轮;总负载 232/297/286ms。本机连续负载超过0.6s会撞SW Power Cap,带宽明显下降,数字不可用
 
-**测量前挂起后台GPU 3D进程**(本机为动态壁纸):不挂起时k1从325掉到200GB/s,PyTorch同步下降--与kernel无关
+**测量前挂起后台GPU 3D进程**(本机为动态壁纸):不挂起时k1从325GB/s掉到200GB/s,PyTorch同步下降--与kernel无关
 
 ### 正确性
 
