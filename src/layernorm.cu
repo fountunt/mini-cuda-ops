@@ -128,11 +128,11 @@ void bench(const float *d_x,const float *d_g,
     CUDA_CHECK(cudaEventElapsedTime(&ms,start,stop));
 
     const double per_call = ms / REPS;
-    const double gb = 2.0 * (double)ROWS * (double)COLS * sizeof(float);
+    const double bytes_moved = 2.0 * (double)ROWS * (double)COLS * sizeof(float) / 1e9;
 
     printf("layernorm:\n");
     printf("per-call = %.4f ms\n", per_call);
-    printf("bw = %.1f GB/s\n", gb / (per_call * 1e-3));
+    printf("bw = %.1f GB/s\n", bytes_moved / (per_call * 1e-3));
     printf("REPEAT = %d\n", REPS);
     printf("window = %.1fms\n", per_call * REPS);
     printf("total = %.1f ms\n", per_call * (WARM + REPS));
